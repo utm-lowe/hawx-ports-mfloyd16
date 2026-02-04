@@ -156,7 +156,23 @@ port_init(void)
     // Loop through 0 to NPORT-1, initialize status of kernal ports and
     // non-kernal ports. Make sure that all ports are empty.
 
-    // YOUR CODE HERE
+    for (int i = 0; i < NPORT; i++) {
+        // Reset buffer state so all ports start empty.
+        ports[i].head = 0;
+        ports[i].tail = 0;
+        ports[i].count = 0;
+        ports[i].owner = 0;
+
+        // Reserve the predefined device ports for the kernel.
+        if (i <= PORT_DISKCMD) {
+            ports[i].free = 0;
+            ports[i].type = PORT_TYPE_KERNEL;
+        } else {
+            ports[i].free = 1;
+            ports[i].type = PORT_TYPE_FREE;
+        }
+    }
+    
 }
 
 
@@ -166,8 +182,29 @@ port_close(int port)
 {
     // Close the port.  If the port is not open, nothing will happen.  However,
     // if it is open, we empty its contents and mark it as free.
+    
+    // Ignore invalid port numbers to avoid corrupting the table.
+    if (port < 0 || port >= NPORT) {
+        return;
+    }
 
-    // YOUR CODE HERE
+    // Nothing to do if it is already free.
+    if (ports[port].free) {
+        return;
+    }
+
+    // Kernel-owned ports are reserved for devices and should not be closed.
+    if (ports[port].type == PORT_TYPE_KERNEL) {
+        return;
+    }
+
+    // Clear the buffer state and release ownership.
+    ports[port].head = 0;
+    ports[port].tail = 0;
+    ports[port].count = 0;
+    ports[port].owner = 0;
+    ports[port].free = 1;
+    ports[port].type = PORT_TYPE_FREE;
 }
 
 
@@ -184,9 +221,39 @@ port_acquire(int port, procid_t proc_id)
     // 
     // If this operation fails, return -1.
 
-    // YOUR CODE HERE
-    
-    return -1;
+    // Allocate the next available port when caller passes -1.
+    if (port == -1) {
+        for (int i = 0; i < NPORT; i++) {
+            if (ports[i].free) {
+                // Reset buffer state for a fresh acquisition.
+                ports[i].free = 0;
+                ports[i].owner = proc_id;
+                ports[i].head = 0;
+                ports[i].tail = 0;
+                ports[i].count = 0;
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // Reject out-of-range explicit ports.
+    if (port < 0 || port >= NPORT) {
+        return -1;
+    }
+
+    // Only free ports can be acquired.
+    if (!ports[port].free) {
+        return -1;
+    }
+
+    // Take ownership and reset the buffer for predictable behavior.
+    ports[port].free = 0;
+    ports[port].owner = proc_id;
+    ports[port].head = 0;
+    ports[port].tail = 0;
+    ports[port].count = 0;
+    return port;
 }
 
 
@@ -200,8 +267,25 @@ port_write(int port, char *buf, int n)
     // you have written. Be sure to update the count field as you
     // write it.
 
-    // YOUR CODE HERE
-    return -1;
+    // Validate the port number and ensure it is open.
+    if (port < 0 || port >= NPORT) {
+        return -1;
+    }
+
+    if (ports[port].free) {
+        return -1;
+    }
+
+    // Append to the circular buffer until full or input is exhausted.
+    int written = 0;
+    while (written < n && ports[port].count < PORT_BUF_SIZE) {
+        ports[port].buffer[ports[port].head] = buf[written];
+        ports[port].head = (ports[port].head + 1) % PORT_BUF_SIZE;
+        ports[port].count++;
+        written++;
+    }
+
+    return written;
 }
 
 
@@ -215,7 +299,23 @@ port_read(int port, char *buf, int n)
     // Return the actual number of bytes you have read.
     // Be sure to update count as you read.
 
-    // YOUR CODE HERE
+    // Validate the port number and ensure it is open.
+    if (port < 0 || port >= NPORT) {
+        return -1;
+    }
 
-    return -1;
+    if (ports[port].free) {
+        return -1;
+    }
+
+    // Drain from the circular buffer until empty or n bytes read.
+    int read = 0;
+    while (read < n && ports[port].count > 0) {
+        buf[read] = ports[port].buffer[ports[port].tail];
+        ports[port].tail = (ports[port].tail + 1) % PORT_BUF_SIZE;
+        ports[port].count--;
+        read++;
+    }
+
+    return read;
 }
